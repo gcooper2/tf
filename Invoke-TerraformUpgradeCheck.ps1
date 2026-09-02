@@ -728,7 +728,12 @@ Write-Host ''
 
 if ($RunInitUpgrade) {
     Write-Warning 'terraform init -upgrade can update .terraform.lock.hcl and module selections.'
-    $init = Invoke-TerraformCommand -Arguments @('init', '-upgrade', '-input=false', '-no-color') -ShowOutput
+    $initArguments = @('init', '-upgrade', '-input=false', '-no-color')
+    if (-not $RunPlan) {
+        $initArguments += '-backend=false'
+        Write-Host 'Validation-only mode: skipping backend initialization.' -ForegroundColor Cyan
+    }
+    $init = Invoke-TerraformCommand -Arguments $initArguments -ShowOutput
     if ($init.ExitCode -ne 0) {
         throw 'terraform init -upgrade failed.'
     }
