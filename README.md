@@ -48,10 +48,10 @@ Run this one PowerShell 7 command on the target machine to download and extract
 the v1.0.0 release into the current directory:
 
 ```powershell
-$release = 'v1.0.0'; $asset = "terraform-upgrade-assistant-$release.zip"; $archive = Join-Path ([IO.Path]::GetTempPath()) $asset; Invoke-WebRequest "https://github.com/gcooper2/terraform-upgrade-assistant/releases/download/$release/$asset" -OutFile $archive; Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $PWD 'terraform-upgrade-assistant-v1.0.0') -Force
+$release = 'v1.0.0'; $asset = "terraform-upgrade-assistant-$release.zip"; $archive = Join-Path ([IO.Path]::GetTempPath()) $asset; Invoke-WebRequest "https://raw.githubusercontent.com/gcooper2/tf/main/$asset" -OutFile $archive; Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $PWD 'terraform-upgrade-assistant-v1.0.0') -Force
 ```
 
-Release page: <https://github.com/gcooper2/terraform-upgrade-assistant/releases/tag/v1.0.0>
+Repository: <https://github.com/gcooper2/tf>
 
 ## Basic workflow
 
