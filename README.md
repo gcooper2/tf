@@ -210,7 +210,7 @@ You can request both safe test modes after validation:
 | `-FromMajor` | Starting major version for this one boundary. Required. |
 | `-ToMajor` | Target major version for this one boundary. Required. |
 | `-RulesPath` | Alternate rule catalog path. Defaults to `upgrade-rules.json` beside the script. |
-| `-RunInitUpgrade` | Runs `terraform init -upgrade` before the validation loop. |
+| `-RunInitUpgrade` | Runs `terraform init -upgrade` before the validation loop. It skips backend initialization unless `-RunPlan` is also selected. |
 | `-RunTests` | Runs only Terraform tests proven to contain explicit plan-only run blocks. |
 | `-RunPlan` | Runs a real speculative `terraform plan` after validation succeeds. |
 | `-VarFiles` | An ordered array of variable-file paths for `-RunPlan`. |
@@ -222,6 +222,9 @@ You can request both safe test modes after validation:
 - `terraform init -upgrade` can update `.terraform.lock.hcl` and `.terraform/`.
   It can also select newer versions of other providers when their constraints
   allow it. Review the lock-file diff.
+- Validation-only initialization uses `-backend=false`, so Azure state-backend
+  credentials are not required. When `-RunPlan` is selected, initialization
+  includes the configured backend because a real plan must read its state.
 - Suggestions are guidance, not automatic fixes. A renamed field may also need
   a different value type, resource ID, state migration, or design decision.
 - Validation checks syntax and provider schemas. It cannot prove that a change
