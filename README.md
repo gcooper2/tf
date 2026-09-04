@@ -46,7 +46,7 @@ state before a major provider upgrade.
 ## Download v1.1.0
 
 Run this one PowerShell 7 command on the target machine to download and extract
-the v1.1.0 release into the current directory:
+the v1.1.0 package into the current directory:
 
 ```powershell
 $release = 'v1.1.0'; $asset = "terraform-upgrade-assistant-$release.zip"; $archive = Join-Path ([IO.Path]::GetTempPath()) $asset; Invoke-WebRequest "https://raw.githubusercontent.com/gcooper2/tf/main/$asset" -OutFile $archive; Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $PWD 'terraform-upgrade-assistant-v1.1.0') -Force
