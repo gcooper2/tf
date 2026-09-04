@@ -2,12 +2,13 @@
 
 <#
 .SYNOPSIS
-Guides a Terraform provider major-version upgrade without modifying Terraform files.
+Guides a Terraform provider major-version upgrade and can apply explicitly approved argument renames.
 
 .DESCRIPTION
 Runs Terraform initialization when requested, reports relevant HashiCorp upgrade-guide
-rules, loops over terraform validate -json, and optionally runs plan-only Terraform
-tests and terraform plan. The script never runs terraform apply or destroy.
+rules, loops over terraform validate -json, and optionally applies safe argument-name
+fixes before validating again. It can also run plan-only Terraform tests and terraform
+plan. The script never runs terraform apply or destroy.
 
 .EXAMPLE
 ./Invoke-TerraformUpgradeCheck.ps1 `
@@ -15,7 +16,8 @@ tests and terraform plan. The script never runs terraform apply or destroy.
     -Provider azurerm `
     -FromMajor 2 `
     -ToMajor 3 `
-    -RunInitUpgrade
+    -RunInitUpgrade `
+    -ApplySafeFixes
 
 .EXAMPLE
 ./Invoke-TerraformUpgradeCheck.ps1 `
@@ -49,6 +51,9 @@ param(
     [string] $RulesPath = (Join-Path $PSScriptRoot 'upgrade-rules.json'),
     [string[]] $VarFiles = @(),
     [switch] $RunInitUpgrade,
+    [switch] $ApplySafeFixes,
+    [ValidateRange(1, 100)]
+    [int] $MaxAutoFixPasses = 20,
     [switch] $RunTests,
     [switch] $RunPlan
 )
@@ -288,6 +293,16 @@ function Test-RuleMatchesDiagnostic {
     return ($diagnosticText -match $tokenRegex -or $sourceLine -match $tokenRegex)
 }
 
+function Get-MatchingRulesForDiagnostic {
+    param([Parameter(Mandatory)] [object] $Diagnostic)
+
+    foreach ($rule in $script:BoundaryRules) {
+        if (Test-RuleMatchesDiagnostic -Rule $rule -Diagnostic $Diagnostic) {
+            $rule
+        }
+    }
+}
+
 function Get-DiagnosticRecords {
     param([Parameter(Mandatory)] [object] $Validation)
 
@@ -295,9 +310,12 @@ function Get-DiagnosticRecords {
     foreach ($diagnostic in $diagnostics) {
         $range = Get-OptionalProperty -InputObject $diagnostic -Name 'range'
         $start = Get-OptionalProperty -InputObject $range -Name 'start'
+        $end = Get-OptionalProperty -InputObject $range -Name 'end'
         $fileName = [string] (Get-OptionalProperty -InputObject $range -Name 'filename')
         $line = [int] (Get-OptionalProperty -InputObject $start -Name 'line')
         $column = [int] (Get-OptionalProperty -InputObject $start -Name 'column')
+        $endLine = [int] (Get-OptionalProperty -InputObject $end -Name 'line')
+        $endColumn = [int] (Get-OptionalProperty -InputObject $end -Name 'column')
         $severity = [string] (Get-OptionalProperty -InputObject $diagnostic -Name 'severity')
         $summary = [string] (Get-OptionalProperty -InputObject $diagnostic -Name 'summary')
         $detail = [string] (Get-OptionalProperty -InputObject $diagnostic -Name 'detail')
@@ -311,6 +329,8 @@ function Get-DiagnosticRecords {
             FileName = $fileName
             Line     = $line
             Column   = $column
+            EndLine  = $endLine
+            EndColumn = $endColumn
             ContextText = $contextText
             GroupKey = "$severity|$summary|$detail"
             Fingerprint = "$severity|$summary|$detail|$fileName|$line|$column"
@@ -357,13 +377,8 @@ function Show-ValidationDiagnostics {
             }
         }
 
-        $matchingRules = foreach ($rule in $script:BoundaryRules) {
-            foreach ($diagnostic in $group.Group) {
-                if (Test-RuleMatchesDiagnostic -Rule $rule -Diagnostic $diagnostic) {
-                    $rule
-                    break
-                }
-            }
+        $matchingRules = foreach ($diagnostic in $group.Group) {
+            Get-MatchingRulesForDiagnostic -Diagnostic $diagnostic
         }
 
         if (@($matchingRules).Count -eq 0) {
@@ -383,6 +398,108 @@ function Show-ValidationDiagnostics {
     }
 
     return $currentFingerprints
+}
+
+function Resolve-SafeTerraformPath {
+    param([AllowNull()] [string] $FileName)
+
+    if ([string]::IsNullOrWhiteSpace($FileName)) { return $null }
+    $candidate = if ([IO.Path]::IsPathRooted($FileName)) { $FileName } else { Join-Path $script:TerraformRoot $FileName }
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+        return $null
+    }
+
+    $resolved = (Resolve-Path -LiteralPath $candidate).Path
+    $rootPrefix = $script:TerraformRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    if (-not $resolved.StartsWith($rootPrefix, $comparison) -or
+        -not $resolved.EndsWith('.tf', $comparison) -or
+        $resolved.EndsWith('.tf.json', $comparison) -or
+        $resolved -match '[\\/](\.terraform|\.git|terraform-upgrade-results)[\\/]' -or
+        ((Get-Item -LiteralPath $resolved).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        return $null
+    }
+
+    return $resolved
+}
+
+function Invoke-SafeArgumentRenames {
+    param([Parameter(Mandatory)] [object[]] $Diagnostics)
+
+    $changed = 0
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $destinationAlreadyPresent = @{}
+    foreach ($diagnostic in $Diagnostics) {
+        if ($diagnostic.Severity -ne 'error' -or $diagnostic.Line -lt 1 -or
+            $diagnostic.EndLine -ne $diagnostic.Line -or $diagnostic.EndColumn -lt 1) {
+            continue
+        }
+
+        $automaticRules = @(Get-MatchingRulesForDiagnostic -Diagnostic $diagnostic | Where-Object {
+            $fix = Get-OptionalProperty -InputObject $_ -Name 'fix'
+            $null -ne $fix -and [string] (Get-OptionalProperty -InputObject $fix -Name 'operation') -eq 'rename_argument'
+        })
+        if ($automaticRules.Count -ne 1) {
+            continue
+        }
+
+        $rule = $automaticRules[0]
+        $fix = Get-OptionalProperty -InputObject $rule -Name 'fix'
+        $from = [string] (Get-OptionalProperty -InputObject $fix -Name 'from')
+        $to = [string] (Get-OptionalProperty -InputObject $fix -Name 'to')
+        $path = Resolve-SafeTerraformPath -FileName $diagnostic.FileName
+        if (-not $path -or -not $seen.Add("$path|$($diagnostic.Line)|$from|$to")) {
+            continue
+        }
+
+        $originalHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+        $content = Get-Content -LiteralPath $path -Raw
+        if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $originalHash) {
+            continue
+        }
+        $lines = [regex]::Split($content, '(?<=\n)')
+        $lineIndex = $diagnostic.Line - 1
+        if ($lineIndex -ge $lines.Count) {
+            continue
+        }
+
+        $pattern = '^(?<indent>[^\S\r\n]*){0}(?<equals>[^\S\r\n]*=)' -f [regex]::Escape($from)
+        $lineRegex = [regex]::new($pattern)
+        $lineMatch = $lineRegex.Match($lines[$lineIndex])
+        $expectedStartColumn = $lineMatch.Groups['indent'].Length + 1
+        $expectedEndColumn = $expectedStartColumn + $from.Length
+        if (-not $lineMatch.Success -or $diagnostic.Column -ne $expectedStartColumn -or
+            $diagnostic.EndColumn -ne $expectedEndColumn) {
+            continue
+        }
+
+        $destinationKey = "$path|$to"
+        if (-not $destinationAlreadyPresent.ContainsKey($destinationKey)) {
+            $destinationPattern = '(?m)^[^\S\r\n]*{0}[^\S\r\n]*=' -f [regex]::Escape($to)
+            $destinationAlreadyPresent[$destinationKey] = ($content -match $destinationPattern)
+        }
+        if ($destinationAlreadyPresent[$destinationKey]) {
+            continue
+        }
+
+        $lines[$lineIndex] = $lineRegex.Replace($lines[$lineIndex], ('${indent}' + $to + '${equals}'), 1)
+        $firstBytes = @(Get-Content -LiteralPath $path -AsByteStream -TotalCount 3)
+        $encoding = if ($firstBytes.Count -eq 3 -and $firstBytes[0] -eq 0xEF -and $firstBytes[1] -eq 0xBB -and $firstBytes[2] -eq 0xBF) {
+            'utf8BOM'
+        }
+        else {
+            'utf8'
+        }
+        if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $originalHash) {
+            Write-Warning "Skipping $($diagnostic.FileName) because it changed after validation."
+            continue
+        }
+        Set-Content -LiteralPath $path -Value ($lines -join '') -NoNewline -Encoding $encoding
+        Write-Host "  Updated $($diagnostic.FileName):$($diagnostic.Line): $from -> $to" -ForegroundColor Green
+        $changed++
+    }
+
+    return $changed
 }
 
 function Get-UsedTerraformTypes {
@@ -709,6 +826,25 @@ foreach ($rule in $allRules) {
             catch { throw "Invalid $regexName in catalog rule $id" }
         }
     }
+
+    $fix = Get-OptionalProperty -InputObject $rule -Name 'fix'
+    if ($null -ne $fix) {
+        $operation = [string] (Get-OptionalProperty -InputObject $fix -Name 'operation')
+        $from = [string] (Get-OptionalProperty -InputObject $fix -Name 'from')
+        $to = [string] (Get-OptionalProperty -InputObject $fix -Name 'to')
+        $oldLeaf = ([string] (Get-OptionalProperty -InputObject $rule -Name 'old') -split '\.')[-1]
+        $newLeaf = ([string] (Get-OptionalProperty -InputObject $rule -Name 'new') -split '\.')[-1]
+
+        if ($operation -ne 'rename_argument' -or $category -ne 'rename' -or $confidence -ne 'high') {
+            throw "Catalog rule $id has an unsafe automatic fix definition."
+        }
+        if ($from -notmatch '^[A-Za-z_][A-Za-z0-9_-]*$' -or $to -notmatch '^[A-Za-z_][A-Za-z0-9_-]*$') {
+            throw "Catalog rule $id has an invalid automatic argument rename."
+        }
+        if ($from -ne $oldLeaf -or $to -ne $newLeaf -or $from -eq $to) {
+            throw "Catalog rule $id automatic fix does not match its documented rename."
+        }
+    }
 }
 
 $script:BoundaryRules = @($allRules | Where-Object {
@@ -781,6 +917,7 @@ Show-RelevantGuideRules
 
 $previousFingerprints = $null
 $validationPass = 0
+$autoFixPass = 0
 do {
     $validationPass++
     Write-Host "Validation pass $validationPass" -ForegroundColor Cyan
@@ -818,7 +955,29 @@ do {
     }
 
     Write-Host "Validation failed with $errorCount error(s) and $warningCount warning(s)." -ForegroundColor Red
-    $answer = Read-Host 'Edit and save the Terraform files, then press Enter to validate again; enter Q to quit'
+
+    if ($ApplySafeFixes -and $autoFixPass -lt $MaxAutoFixPasses) {
+        Write-Host 'Checking for catalog-approved argument renames...' -ForegroundColor Cyan
+        $changed = Invoke-SafeArgumentRenames -Diagnostics $diagnostics
+        if ($changed -gt 0) {
+            $autoFixPass++
+            Write-Host "Applied $changed edit(s). Running validation again." -ForegroundColor Cyan
+            Write-Host ''
+            continue
+        }
+        Write-Host 'No safe automatic edit is available for the remaining errors.' -ForegroundColor Yellow
+    }
+    elseif ($ApplySafeFixes -and $autoFixPass -ge $MaxAutoFixPasses) {
+        Write-Warning "Stopped automatic editing after $MaxAutoFixPasses pass(es)."
+    }
+
+    try {
+        $answer = Read-Host 'Edit and save the Terraform files, then press Enter to validate again; enter Q to quit'
+    }
+    catch {
+        Write-Host 'Interactive input is unavailable, so the validation loop stopped.' -ForegroundColor Yellow
+        exit 1
+    }
     if ($null -eq $answer -or $answer.Trim() -match '(?i)^q$') {
         Write-Host 'Stopped by user.' -ForegroundColor Yellow
         exit 1
@@ -861,4 +1020,3 @@ if ($RunPlan) {
 }
 
 exit $finalExitCode
-

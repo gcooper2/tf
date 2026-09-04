@@ -47,6 +47,11 @@
       },
       "old": "allow_blob_public_access",
       "new": "allow_nested_items_to_be_public",
+      "fix": {
+        "operation": "rename_argument",
+        "from": "allow_blob_public_access",
+        "to": "allow_nested_items_to_be_public"
+      },
       "suggestion": "Replace allow_blob_public_access with allow_nested_items_to_be_public and review the clarified nested-item semantics.",
       "guideUrl": "https://github.com/hashicorp/terraform-provider-azurerm/blob/v3.0.0/website/docs/guides/3.0-upgrade-guide.html.markdown",
       "guideSection": "Behavioural updates > Storage"
@@ -387,6 +392,11 @@
       },
       "old": "enable_power_bi_service",
       "new": "power_bi_service_enabled",
+      "fix": {
+        "operation": "rename_argument",
+        "from": "enable_power_bi_service",
+        "to": "power_bi_service_enabled"
+      },
       "suggestion": "Replace enable_power_bi_service with power_bi_service_enabled.",
       "guideUrl": "https://github.com/hashicorp/terraform-provider-azurerm/blob/v4.0.0/website/docs/guides/4.0-upgrade-guide.html.markdown",
       "guideSection": "Behaviour changes and removed properties in Resources > azurerm_analysis_services_server"
@@ -506,6 +516,11 @@
       },
       "old": "enable_https_traffic_only",
       "new": "https_traffic_only_enabled",
+      "fix": {
+        "operation": "rename_argument",
+        "from": "enable_https_traffic_only",
+        "to": "https_traffic_only_enabled"
+      },
       "suggestion": "Replace enable_https_traffic_only with https_traffic_only_enabled.",
       "guideUrl": "https://github.com/hashicorp/terraform-provider-azurerm/blob/v4.0.0/website/docs/guides/4.0-upgrade-guide.html.markdown",
       "guideSection": "Behaviour changes and removed properties in Resources > azurerm_storage_account"
@@ -778,6 +793,11 @@
       },
       "old": "enable_http2",
       "new": "http2_enabled",
+      "fix": {
+        "operation": "rename_argument",
+        "from": "enable_http2",
+        "to": "http2_enabled"
+      },
       "suggestion": "Replace enable_http2 with http2_enabled.",
       "guideUrl": "https://github.com/hashicorp/terraform-provider-azurerm/blob/v5.0.0/website/docs/guides/5.0-upgrade-guide.html.markdown",
       "guideSection": "Breaking Changes in Resources > azurerm_application_gateway"
@@ -829,6 +849,11 @@
       },
       "old": "behavior_on_match",
       "new": "behaviour_on_match",
+      "fix": {
+        "operation": "rename_argument",
+        "from": "behavior_on_match",
+        "to": "behaviour_on_match"
+      },
       "suggestion": "Replace behavior_on_match with behaviour_on_match.",
       "guideUrl": "https://github.com/hashicorp/terraform-provider-azurerm/blob/v5.0.0/website/docs/guides/5.0-upgrade-guide.html.markdown",
       "guideSection": "Breaking Changes in Resources > azurerm_cdn_frontdoor_rule"
@@ -1041,6 +1066,11 @@
       },
       "old": "application_id",
       "new": "client_id",
+      "fix": {
+        "operation": "rename_argument",
+        "from": "application_id",
+        "to": "client_id"
+      },
       "suggestion": "Replace application_id with client_id in this data source and in references to its exported value.",
       "guideUrl": "https://github.com/hashicorp/terraform-provider-azuread/blob/v3.0.0/docs/guides/3.0-upgrade-guide.md",
       "guideSection": "Removal of deprecated fields > Data Source: azuread_application"
@@ -1126,6 +1156,11 @@
       },
       "old": "authorized_app_id",
       "new": "authorized_client_id",
+      "fix": {
+        "operation": "rename_argument",
+        "from": "authorized_app_id",
+        "to": "authorized_client_id"
+      },
       "suggestion": "Replace authorized_app_id with authorized_client_id.",
       "guideUrl": "https://github.com/hashicorp/terraform-provider-azuread/blob/v3.0.0/docs/guides/3.0-upgrade-guide.md",
       "guideSection": "Removal of deprecated fields > Resource: azuread_application_pre_authorized"
@@ -1160,6 +1195,11 @@
       },
       "old": "application_id",
       "new": "client_id",
+      "fix": {
+        "operation": "rename_argument",
+        "from": "application_id",
+        "to": "client_id"
+      },
       "suggestion": "Replace application_id with client_id in this data source and its references.",
       "guideUrl": "https://github.com/hashicorp/terraform-provider-azuread/blob/v3.0.0/docs/guides/3.0-upgrade-guide.md",
       "guideSection": "Removal of deprecated fields > Data Source: azuread_service_principal"
@@ -1177,6 +1217,11 @@
       },
       "old": "application_id",
       "new": "client_id",
+      "fix": {
+        "operation": "rename_argument",
+        "from": "application_id",
+        "to": "client_id"
+      },
       "suggestion": "Replace application_id with client_id in the service principal resource and its references.",
       "guideUrl": "https://github.com/hashicorp/terraform-provider-azuread/blob/v3.0.0/docs/guides/3.0-upgrade-guide.md",
       "guideSection": "Removal of deprecated fields > Resource: azuread_service_principal"
@@ -1194,6 +1239,11 @@
       },
       "old": "application_ids",
       "new": "client_ids",
+      "fix": {
+        "operation": "rename_argument",
+        "from": "application_ids",
+        "to": "client_ids"
+      },
       "suggestion": "Replace application_ids with client_ids.",
       "guideUrl": "https://github.com/hashicorp/terraform-provider-azuread/blob/v3.0.0/docs/guides/3.0-upgrade-guide.md",
       "guideSection": "Removal of deprecated fields > Data Source: azuread_service_principals"
@@ -4961,4 +5011,3 @@
     }
   ]
 }
-

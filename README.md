@@ -5,8 +5,9 @@ provider upgrades one major-version boundary at a time.
 
 It repeatedly runs `terraform validate -json`, groups the diagnostics, and uses
 the included HashiCorp-based rule catalog to suggest what to review or replace.
-You make and review every source change yourself. The assistant does not edit
-Terraform files and never runs `terraform apply` or `terraform destroy`.
+With `-ApplySafeFixes`, it also renames explicitly approved argument names at
+the exact source ranges Terraform reports, then validates again. It never runs
+`terraform apply` or `terraform destroy`.
 
 ## What is included
 
@@ -42,13 +43,13 @@ aid; read the linked guide for the boundary you are upgrading.
 Use a clean version-control branch and a non-production environment. Back up
 state before a major provider upgrade.
 
-## Download v1.0.0
+## Download v1.1.0
 
 Run this one PowerShell 7 command on the target machine to download and extract
-the v1.0.0 release into the current directory:
+the v1.1.0 release into the current directory:
 
 ```powershell
-$release = 'v1.0.0'; $asset = "terraform-upgrade-assistant-$release.zip"; $archive = Join-Path ([IO.Path]::GetTempPath()) $asset; Invoke-WebRequest "https://raw.githubusercontent.com/gcooper2/tf/main/$asset" -OutFile $archive; Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $PWD 'terraform-upgrade-assistant-v1.0.0') -Force
+$release = 'v1.1.0'; $asset = "terraform-upgrade-assistant-$release.zip"; $archive = Join-Path ([IO.Path]::GetTempPath()) $asset; Invoke-WebRequest "https://raw.githubusercontent.com/gcooper2/tf/main/$asset" -OutFile $archive; Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $PWD 'terraform-upgrade-assistant-v1.1.0') -Force
 ```
 
 Repository: <https://github.com/gcooper2/tf>
@@ -58,22 +59,23 @@ Repository: <https://github.com/gcooper2/tf>
 The command handles one Terraform root and one provider boundary per run.
 
 1. Change only the selected provider's version constraint to the target version.
-2. Run the matching command below with `-RunInitUpgrade`.
-3. Read the grouped errors and suggestions.
-4. Edit the Terraform files yourself.
-5. Return to the terminal and press **Enter** to validate again.
+2. Run the matching command below with `-RunInitUpgrade -ApplySafeFixes`.
+3. The assistant renames any catalog-approved argument names and validates again.
+4. Read the remaining grouped errors and suggestions.
+5. Make any more complicated edits yourself, then press **Enter** to validate again.
 6. Repeat until validation passes. Enter `Q` to stop safely.
 7. Optionally run plan-only Terraform tests and a real speculative plan.
 8. Review and commit the Terraform changes and `.terraform.lock.hcl` before
    starting the next boundary.
 
-The loop waits for Enter before rerunning. It does not repeatedly run against
-unchanged files, and it stops safely if interactive input is unavailable.
+The loop validates again immediately after an automatic edit. It waits for
+Enter only when an error needs your review, and stops safely if interactive
+input is unavailable. Omit `-ApplySafeFixes` for suggestion-only mode.
 
 Set these example paths once before using the commands:
 
 ```powershell
-$tool = 'C:\Tools\terraform-upgrade-assistant-v1.0.0\Invoke-TerraformUpgradeCheck.ps1'
+$tool = 'C:\Tools\terraform-upgrade-assistant-v1.1.0\Invoke-TerraformUpgradeCheck.ps1'
 $root = 'C:\Terraform\MyModule'
 ```
 
@@ -88,7 +90,7 @@ version = "= 3.9.0"
 Run:
 
 ```powershell
-& $tool -Root $root -Provider azuread -FromMajor 2 -ToMajor 3 -RunInitUpgrade
+& $tool -Root $root -Provider azuread -FromMajor 2 -ToMajor 3 -RunInitUpgrade -ApplySafeFixes
 ```
 
 ### 2. AzureRM 2.99.0 to 3.117.1
@@ -102,7 +104,7 @@ version = "= 3.117.1"
 Run:
 
 ```powershell
-& $tool -Root $root -Provider azurerm -FromMajor 2 -ToMajor 3 -RunInitUpgrade
+& $tool -Root $root -Provider azurerm -FromMajor 2 -ToMajor 3 -RunInitUpgrade -ApplySafeFixes
 ```
 
 ### 3. AzureRM 3.117.1 to 4.81.0
@@ -116,21 +118,21 @@ version = "= 4.81.0"
 Run:
 
 ```powershell
-& $tool -Root $root -Provider azurerm -FromMajor 3 -ToMajor 4 -RunInitUpgrade
+& $tool -Root $root -Provider azurerm -FromMajor 3 -ToMajor 4 -RunInitUpgrade -ApplySafeFixes
 ```
 
-### 4. AzureRM 4.81.0 to 5.2.0
+### 4. AzureRM 4.81.0 to 5.4.0
 
 Set the AzureRM constraint to:
 
 ```hcl
-version = "= 5.2.0"
+version = "= 5.4.0"
 ```
 
 Run:
 
 ```powershell
-& $tool -Root $root -Provider azurerm -FromMajor 4 -ToMajor 5 -RunInitUpgrade
+& $tool -Root $root -Provider azurerm -FromMajor 4 -ToMajor 5 -RunInitUpgrade -ApplySafeFixes
 ```
 
 Do not combine boundaries. Finish validation and plan review for one boundary
@@ -211,22 +213,33 @@ You can request both safe test modes after validation:
 | `-ToMajor` | Target major version for this one boundary. Required. |
 | `-RulesPath` | Alternate rule catalog path. Defaults to `upgrade-rules.json` beside the script. |
 | `-RunInitUpgrade` | Runs `terraform init -upgrade` before the validation loop. It skips backend initialization unless `-RunPlan` is also selected. |
+| `-ApplySafeFixes` | Renames only explicitly approved argument names at exact source ranges reported by Terraform, then validates again. |
+| `-MaxAutoFixPasses` | Maximum automatic edit-and-validate passes. Defaults to 20. |
 | `-RunTests` | Runs only Terraform tests proven to contain explicit plan-only run blocks. |
 | `-RunPlan` | Runs a real speculative `terraform plan` after validation succeeds. |
 | `-VarFiles` | An ordered array of variable-file paths for `-RunPlan`. |
 
 ## Safety and limitations
 
-- The assistant never writes `.tf`, `.tfvars`, state, or plan files and never
-  invokes `terraform apply` or `terraform destroy`.
+- Without `-ApplySafeFixes`, the assistant does not write Terraform source files.
+  With it, the assistant changes only explicitly approved argument names at
+  exact `.tf` source ranges reported by Terraform. It does not edit values, references,
+  `.tfvars`, JSON Terraform files, state, or plans.
+- Automatic editing is intentionally limited. Value conversions, Boolean
+  inversions, resource replacements, removals, ID changes, and block restructuring
+  remain manual suggestions.
+- Work on a version-control branch so every automatic edit is visible and easy
+  to undo. The assistant does not create separate backup copies.
+- The assistant never invokes `terraform apply` or `terraform destroy`.
 - `terraform init -upgrade` can update `.terraform.lock.hcl` and `.terraform/`.
   It can also select newer versions of other providers when their constraints
   allow it. Review the lock-file diff.
 - Validation-only initialization uses `-backend=false`, so Azure state-backend
   credentials are not required. When `-RunPlan` is selected, initialization
   includes the configured backend because a real plan must read its state.
-- Suggestions are guidance, not automatic fixes. A renamed field may also need
-  a different value type, resource ID, state migration, or design decision.
+- Suggestions that are not explicitly marked for automatic renaming remain
+  guidance and may require a different value type, resource ID, state migration,
+  or design decision.
 - Validation checks syntax and provider schemas. It cannot prove that a change
   is operationally safe or detect every changed default and runtime behavior.
 - Plan-only tests and speculative plans can contact providers and read remote
@@ -242,4 +255,3 @@ You can request both safe test modes after validation:
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
