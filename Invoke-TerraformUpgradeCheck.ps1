@@ -8,7 +8,8 @@ Guides a Terraform provider major-version upgrade and can apply explicitly appro
 Runs Terraform initialization when requested, reports relevant HashiCorp upgrade-guide
 rules, loops over terraform validate -json, and optionally applies safe argument-name
 fixes before validating again. It can also run plan-only Terraform tests and terraform
-plan. The script never runs terraform apply or destroy.
+plan. Referenced local module folders are included automatically after initialization,
+even outside -Root. The script never runs terraform apply or destroy.
 
 .EXAMPLE
 ./Invoke-TerraformUpgradeCheck.ps1 `
@@ -168,13 +169,96 @@ function Invoke-TerraformCommand {
     }
 }
 
+function Test-TerraformSourcePath {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $cachePrefix = $script:TerraformModuleCacheDirectory.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if ($fullPath -match '[\\/](\.terraform|\.git|terraform-upgrade-results)([\\/]|$)' -or
+        $fullPath.Equals($script:TerraformModuleCacheDirectory, $comparison) -or
+        $fullPath.StartsWith($cachePrefix, $comparison)) {
+        return $false
+    }
+
+    # Reject links in the whole path, not just the file itself: a junction can
+    # otherwise redirect an apparently included module to another directory.
+    $item = Get-Item -LiteralPath $fullPath -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) { return $false }
+    while ($null -ne $item) {
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+        $item = if ($item -is [IO.DirectoryInfo]) { $item.Parent } else { $item.Directory }
+    }
+    return $true
+}
+
+function Update-TerraformSourceDirectories {
+    [CmdletBinding()]
+    param()
+
+    # Terraform's installed module manifest includes nested modules and avoids
+    # guessing module sources from comments, strings, or unrelated .tf files.
+    $dataDirectory = if ($env:TF_DATA_DIR) { $env:TF_DATA_DIR } else { '.terraform' }
+    if (-not [IO.Path]::IsPathRooted($dataDirectory)) {
+        $dataDirectory = Join-Path $script:TerraformRoot $dataDirectory
+    }
+    $script:TerraformModuleCacheDirectory = [IO.Path]::GetFullPath((Join-Path $dataDirectory 'modules'))
+    $script:TerraformSourceDirectories = @($script:TerraformRoot)
+    $manifestPath = Join-Path $script:TerraformModuleCacheDirectory 'modules.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        Write-Warning 'No initialized module list was found. Only the root folder is included; run terraform init to discover local modules.'
+        return
+    }
+
+    try {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json -Depth 100 -ErrorAction Stop
+        $modulesProperty = $manifest.PSObject.Properties['Modules']
+        if ($null -eq $modulesProperty -or $modulesProperty.Value -isnot [array]) { throw 'The Modules array is missing.' }
+        $modules = $modulesProperty.Value
+        $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+        $comparer = if ($IsWindows) { [StringComparer]::OrdinalIgnoreCase } else { [StringComparer]::Ordinal }
+        $directories = [System.Collections.Generic.HashSet[string]]::new($comparer)
+        $null = $directories.Add($script:TerraformRoot)
+        $localModules = [System.Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+        $localModules.Add('', $script:TerraformRoot)
+
+        # Parents must be accepted first. A local child of a downloaded module
+        # is still downloaded code, so it must not become editable.
+        foreach ($module in @($modules | Sort-Object { ([string] (Get-OptionalProperty $_ 'Key') -split '\.').Count })) {
+            $key = [string] (Get-OptionalProperty $module 'Key')
+            $source = [string] (Get-OptionalProperty $module 'Source')
+            $directory = [string] (Get-OptionalProperty $module 'Dir')
+            if (-not $key -or $source -notmatch '^\.{1,2}([\\/]|$)' -or -not $directory) { continue }
+            $parentKey = if ($key.Contains('.')) { $key.Substring(0, $key.LastIndexOf('.')) } else { '' }
+            if (-not $localModules.ContainsKey($parentKey)) { continue }
+
+            $candidate = if ([IO.Path]::IsPathRooted($directory)) { $directory } else { Join-Path $script:TerraformRoot $directory }
+            $candidate = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath($candidate))
+            $expected = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath((Join-Path $localModules[$parentKey] $source)))
+            if (-not $candidate.Equals($expected, $comparison) -or
+                -not (Test-Path -LiteralPath $candidate -PathType Container) -or
+                -not (Test-TerraformSourcePath -Path $candidate)) {
+                Write-Warning "Skipping local module '$key': its source directory could not be safely verified."
+                continue
+            }
+            $localModules[$key] = $candidate
+            $null = $directories.Add($candidate)
+        }
+        $script:TerraformSourceDirectories = @($directories | Sort-Object)
+    }
+    catch {
+        Write-Warning 'Unable to read the initialized module list. Only the root folder is included; rerun terraform init before editing local modules.'
+    }
+}
+
 function Get-TerraformFiles {
-    $excluded = '[\\/](\.terraform|\.git|terraform-upgrade-results)[\\/]'
-    return @(Get-ChildItem -LiteralPath $script:TerraformRoot -File -Recurse |
-        Where-Object {
+    return @(foreach ($directory in $script:TerraformSourceDirectories) {
+        # Terraform loads only the files directly in each selected directory.
+        Get-ChildItem -LiteralPath $directory -File | Where-Object {
             ($_.Name -like '*.tf' -or $_.Name -like '*.tf.json') -and
-            $_.FullName -notmatch $excluded
-        })
+            (Test-TerraformSourcePath -Path $_.FullName)
+        }
+    })
 }
 
 function Get-SourceLine {
@@ -409,14 +493,12 @@ function Resolve-SafeTerraformPath {
         return $null
     }
 
-    $resolved = (Resolve-Path -LiteralPath $candidate).Path
-    $rootPrefix = $script:TerraformRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $resolved = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $candidate).Path)
     $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
-    if (-not $resolved.StartsWith($rootPrefix, $comparison) -or
-        -not $resolved.EndsWith('.tf', $comparison) -or
-        $resolved.EndsWith('.tf.json', $comparison) -or
-        $resolved -match '[\\/](\.terraform|\.git|terraform-upgrade-results)[\\/]' -or
-        ((Get-Item -LiteralPath $resolved).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    $parentDirectory = [IO.Path]::GetDirectoryName($resolved)
+    $included = @($script:TerraformSourceDirectories | Where-Object { $_.Equals($parentDirectory, $comparison) }).Count -gt 0
+    if (-not $included -or -not $resolved.EndsWith('.tf', $comparison) -or
+        -not (Test-TerraformSourcePath -Path $resolved)) {
         return $null
     }
 
@@ -769,7 +851,9 @@ if ($ToMajor -ne ($FromMajor + 1)) {
     throw 'Upgrade one major-version boundary at a time (for example, 2 to 3).'
 }
 
-$script:TerraformRoot = (Resolve-Path -LiteralPath $Root).Path
+$script:TerraformRoot = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath((Resolve-Path -LiteralPath $Root).Path))
+$script:TerraformSourceDirectories = @($script:TerraformRoot)
+$script:TerraformModuleCacheDirectory = Join-Path $script:TerraformRoot '.terraform/modules'
 $terraformCommand = Get-Command terraform -CommandType Application -ErrorAction SilentlyContinue |
     Select-Object -First 1
 if ($null -eq $terraformCommand) {
@@ -783,7 +867,7 @@ $script:WarnedTerraformCliArgs = [System.Collections.Generic.HashSet[string]]::n
 
 $configurationFiles = @(Get-TerraformFiles)
 if ($configurationFiles.Count -eq 0) {
-    throw "No .tf or .tf.json configuration files were found under $script:TerraformRoot"
+    throw "No readable .tf or .tf.json configuration files were found directly in $script:TerraformRoot"
 }
 
 $resolvedVarFiles = @(foreach ($file in $VarFiles) {
@@ -912,6 +996,17 @@ else {
     Write-Host "Selected $Provider provider: $selectedVersion" -ForegroundColor Green
 }
 Write-Host ''
+
+Update-TerraformSourceDirectories
+$localModuleDirectories = @($script:TerraformSourceDirectories | Where-Object { $_ -ne $script:TerraformRoot })
+if ($localModuleDirectories.Count -gt 0) {
+    Write-Host 'Local module folders included automatically:' -ForegroundColor Cyan
+    $localModuleDirectories | ForEach-Object { Write-Host "  - $_" }
+    if ($ApplySafeFixes) {
+        Write-Warning 'Safe fixes can edit these shared module folders; other Terraform roots using them will see the same edits.'
+    }
+    Write-Host ''
+}
 
 Show-RelevantGuideRules
 

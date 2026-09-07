@@ -43,13 +43,16 @@ aid; read the linked guide for the boundary you are upgrading.
 Use a clean version-control branch and a non-production environment. Back up
 state before a major provider upgrade.
 
-## Download v1.1.0
+## Download
+
+This package includes automatic local-module discovery. If you already have
+the tool, replace the PowerShell script; `upgrade-rules.json` is unchanged.
 
 Run this one PowerShell 7 command on the target machine to download and extract
-the v1.1.0 package into the current directory:
+the updated package into the current directory:
 
 ```powershell
-$release = 'v1.1.0'; $asset = "terraform-upgrade-assistant-$release.zip"; $archive = Join-Path ([IO.Path]::GetTempPath()) $asset; Invoke-WebRequest "https://raw.githubusercontent.com/gcooper2/tf/main/$asset" -OutFile $archive; Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $PWD 'terraform-upgrade-assistant-v1.1.0') -Force
+$asset = 'terraform-upgrade-assistant-local-modules.zip'; $archive = Join-Path ([IO.Path]::GetTempPath()) $asset; Invoke-WebRequest "https://raw.githubusercontent.com/gcooper2/tf/main/$asset" -OutFile $archive; Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $PWD 'terraform-upgrade-assistant') -Force
 ```
 
 Repository: <https://github.com/gcooper2/tf>
@@ -72,10 +75,34 @@ The loop validates again immediately after an automatic edit. It waits for
 Enter only when an error needs your review, and stops safely if interactive
 input is unavailable. Omit `-ApplySafeFixes` for suggestion-only mode.
 
+### Local module folders are included automatically
+
+No extra switch is needed. `-Root` remains the directory where all Terraform
+commands run. After initialization, the assistant reads Terraform's installed
+module list and includes referenced local module folders, including sources
+such as `../modules/shared` outside `-Root` and nested local modules.
+
+It prints the included module folders before validation. With `-ApplySafeFixes`,
+catalog-approved fixes reported in those folders can be applied too. A shared
+module edit also affects any other Terraform root using that same module;
+review those changes on your version-control branch.
+
+Only direct configuration files in the root and selected local module folders
+are included. Unreferenced sibling/child folders, downloaded modules (including
+their local submodules), `.terraform`, `.git`, and linked files/directories are
+excluded. The assistant also honors Terraform's `TF_DATA_DIR` location when
+finding the module list and excluding downloaded module caches.
+
+If the initialized module list is missing or unreadable, the assistant warns
+and includes only the root folder. Run `terraform init` using your normal
+configuration, then rerun the assistant; `-RunInitUpgrade` also refreshes that
+list as part of its existing initialization step. Rerun initialization and the
+assistant after changing module sources.
+
 Set these example paths once before using the commands:
 
 ```powershell
-$tool = 'C:\Tools\terraform-upgrade-assistant-v1.1.0\Invoke-TerraformUpgradeCheck.ps1'
+$tool = 'C:\Tools\terraform-upgrade-assistant\Invoke-TerraformUpgradeCheck.ps1'
 $root = 'C:\Terraform\MyModule'
 ```
 
@@ -225,6 +252,8 @@ You can request both safe test modes after validation:
   With it, the assistant changes only explicitly approved argument names at
   exact `.tf` source ranges reported by Terraform. It does not edit values, references,
   `.tfvars`, JSON Terraform files, state, or plans.
+- The same automatic-edit rules apply to local module folders discovered from
+  Terraform's initialized module list, even when they are outside `-Root`.
 - Automatic editing is intentionally limited. Value conversions, Boolean
   inversions, resource replacements, removals, ID changes, and block restructuring
   remain manual suggestions.
